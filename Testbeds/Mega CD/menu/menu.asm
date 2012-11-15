@@ -63,9 +63,14 @@ EntryPoint:
 		moveq	#$1B, d2							; $1B rows
 		bsr.w	ShowVDPGraphics						; Write to the FG.
 		
-		lea		ASCII_MenuChoices, a1			; Load loading text.
+		lea		ASCII_MenuChoices, a1				; Load loading text.
 		move.l	#$42000003, d5						; Write to the the FG maps.
 		bsr.w	WriteASCIIToScreen					; Write some ASCII to screen.
+		
+		move.l	#$42200003, d1						; VRAM address
+		move.w	#$E1, d0
+		bsr.w	DisplayHEXOnScreen
+
 		
 		move.w	#$8174, $C00004						; Enable the display.
 		move.l	#0, $FF0200							; Clear status long		
@@ -267,6 +272,39 @@ DoClear:
 PalSys_FadeTick:
 		rts
         
+DisplayHEXOnScreen:
+		lea		$C00000, a0
+		move.l	d1, 4(a0)
+		
+		move.b	d0, -(sp)
+		and.b	#$F0, d0
+		lsr.b	#4, d0
+		
+		cmp.b	#$A, d0
+		blo.s	@writeHighNybble
+		
+		add.w	#$07, d0
+		
+@writeHighNybble:
+		add.w	#VRAM_ASCII+$10, d0
+		move.w	d0, (a0)
+		
+		moveq	#0, d0
+		move.b	(sp)+, d0
+		and.b	#$0F, d0
+		
+		cmp.b	#$A, d0
+		blo.s	@writeLowNybble
+		
+		add.w	#$07, d0
+		
+@writeLowNybble:
+		add.w	#VRAM_ASCII+$10, d0
+		move.w	d0, (a0)
+		
+@done:
+		rts
+		
 WriteASCIIToScreen:	
 _Tab		equ	$09									; Byte to indicate a tab.
 _NewLine	equ	$0A									; Byte to indicate a newline. 
@@ -343,8 +381,12 @@ MainMenu_FG_Map:
 		even
 		
 ASCII_MenuChoices:
-		dc.b	" FMV to play:", _NewLine, _NewLine, _NewLine
-		dc.b	" Play FMV"
+		dc.b	"  FMV to play: $", _NewLine
+		dc.b	_NewLine, _NewLine, _NewLine, _NewLine, _NewLine, _NewLine
+		dc.b	_NewLine, _NewLine, _NewLine, _NewLine, _NewLine, _NewLine
+		dc.b	_NewLine, _NewLine, _NewLine, _NewLine, _NewLine, _NewLine
+		dc.b	_NewLine, _NewLine, _NewLine
+		dc.b	"        Press Start to Play FMV"
 		dc.b	_End
 		even
 		
