@@ -472,5 +472,5 @@ ASCII_MenuChoices:
 Font:	incbin	"menu/Font.bin"
 		even
 		
-;FMV_MainCode:
-		
+FMV_MainCode:
+		include	"../../Decoder/Mega CD/Main CPU/main.asm"
