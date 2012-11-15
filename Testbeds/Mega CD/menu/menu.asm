@@ -42,7 +42,7 @@ EntryPoint:
 		bsr.w	ClearBG								; Clear the BG plane
 		
 		lea		Font, a0							; Load from RAM
-		move.w	#$E00, d0						; Start of VRAM
+		move.w	#$E00, d0							; Start of VRAM
 		move.w	#$80, d1							; Load 64 tiles
 		bsr.w	Load_Tiles							; Write to VRAM
 		
@@ -66,12 +66,7 @@ EntryPoint:
 		lea		ASCII_MenuChoices, a1				; Load loading text.
 		move.l	#$42000003, d5						; Write to the the FG maps.
 		bsr.w	WriteASCIIToScreen					; Write some ASCII to screen.
-		
-		move.l	#$42200003, d1						; VRAM address
-		move.w	#$E1, d0
-		bsr.w	DisplayHEXOnScreen
 
-		
 		move.w	#$8174, $C00004						; Enable the display.
 		move.l	#0, $FF0200							; Clear status long		
 		move	#$2200, sr							; Enable interrupters.
@@ -80,22 +75,66 @@ EntryPoint:
 		moveq	#0, d0								; Offset is 0
 		bsr.w	Load_Palette						; Display palette.
 		
-		move.b	#5, $A1200E							; Play a PCM sample
+		move.b	#0, (SelectedFMV).w					; Clear out selected FMV.
 		
 MainLoop:
 		stop	#$2500								; Wait for VBlank
 		
+		move.b	(ControlStateArea+1).w, d0			; Get button state to d0 (if we AND the address, it will get destroyed)
+		and.b	#$C, d0 							; Is Left/Right pressed?
+		bne.s	@leftRightPressed					; If so, branch.
+		
+		move.b	(ControlStateArea+1).w, d0			; Get button state to d0 (if we AND the address, it will get destroyed)
+		and.b	#$80, d0 							; Is start pressed?
+		bne.s	@startPressed						; If so, branch.
+		
 		bra.w	MainLoop
 		
+@leftRightPressed:
+		move.b	(ControlStateArea+1).w, d0			; Get button state to d0 (if we AND the address, it will get destroyed)
+		and.b	#$8, d0 							; Is Right pressed?
+		bne.s	@rightPressed						; If so, branch.
+		
+		cmp.b	#0, (SelectedFMV).w					; Are we at the left limit?
+		beq.w	MainLoop							; If so, branch back into the main loop.
+		
+		subq.b	#1, (SelectedFMV).w					; Move the cursor to the left one.
+		
+		bra.s	@continue
+
+@rightPressed:
+		cmp.b	#7, (SelectedFMV).w					; Are we at the right limit?
+		bhs.w	MainLoop							; If so, branch back into the main loop.
+		
+		addq.b	#1, (SelectedFMV).w					; Move the cursor to the right one.
+
+@continue:
+		move.l	#$42200003, d1						; VRAM address
+		moveq	#0, d0								; Clear d0
+		move.b	(SelectedFMV).w, d0					; FMV to play
+		bsr.w	DisplayHEXOnScreen
+		
+		bra.w	MainLoop							; Jump back into the main loop
+		
+@startPressed:
+		
+		bra.w	MainLoop							; Jump back into the main loop
+		
+;===================================================================================================
+; Interrupts
 ;===================================================================================================
 
 VBlank:
 		movem.l	d0-a6, -(sp)						; Back up registers.
-		bsr.w	ReadJoypads							; Read joypads.
+		bsr.w	JoypadRead							; Read joypads.
 		move.b	#1, $A12000							; Trigger Level 2 int on Sub CPU
 		movem.l	(sp)+, d0-a6						; Restore registers.
 		rte
-	
+		
+;===================================================================================================
+; VDP routines
+;===================================================================================================
+
 Load_Palette:
 ;Loads a palette of 16 entries
 ; a0 = data source
@@ -220,34 +259,68 @@ Screen_Map_WithAdd:
 		add.l	d4, d2							; Increase to next row on VRam
 		dbf		d1, @SM_Row						; Repeat til all rows have dumped
 		rts										; Return To Sub
-		
-ReadJoypads:
-		lea	$FFFFFFF8, a0
-		lea	$A10003, a1
-		jsr	Joypad_Read
-		addq.w	#2,a1
 
-Joypad_Read:
-		move.b	#0,(a1)
-		nop
-		nop
-		move.b	(a1),d0
-		lsl.b	#2,d0
-		andi.b	#$C0,d0
-		move.b	#$40,(a1) ; '@'
-		nop
-		nop
-		move.b	(a1),d1
-		andi.b	#$3F,d1	; '?'
-		or.b	d1,d0
-		not.b	d0
-		move.b	(a0),d1
-		eor.b	d0,d1
-		move.b	d0,(a0)+
-		and.b	d0,d1
-		move.b	d1,(a0)+
-		rts
+
+;===================================================================================================
+; Controller input routines
+;===================================================================================================
 		
+		SelectedFMV: EQU $FFFFFF80
+		ControlStateArea: EQU $FFFFFF82									; Area in RAM that holds the button states
+
+; Routine to read the currently pressed buttons from all three IO ports (control 1&2, EXT)
+; Outputted format is in S ACB RL DU
+
+JoypadRead:
+;		move.w	#$100, $A11100										; Stop Z80 and wait
+;		
+;@waitZ80:
+;		btst	#0, $A11101											; Has the Z80 stopped?
+;		bne.s	@waitZ80											; If not, wait.
+		
+		lea	ControlStateArea, a0									; Area where joypad states are written
+		lea	$A10003, a1												; First joypad port
+		
+		moveq	#2, d7												; Read all 3 control ports
+		
+@readJoypads:
+		move.b	#0, (a1)											; Assert /TH
+		rept 4
+		nop															; Wait until data is ready.
+		endr
+
+		move.b	(a1), d0											; Read back controller states. (00SA00DU)
+		lsl.b	#2, d0												; Shift start and A into the high 2 bits
+		and.b	#$C0, d0											; Get only S+A buttons
+			
+		move.b	#$40, (a1)											; De-assert /TH
+		rept 4
+		nop															; Wait until data is ready.
+		endr
+		
+		move.b	(a1), d1											; Read back the controller states. (11CBRLDU)
+		and.b	#$3F, d1											; Get only CBRLDU alone
+		or.b	d1, d0												; OR together the control states
+		not.b	d0													; Invert the bits
+		
+		move.b	(a0), d1											; Get the current button press bits from RAM
+		eor.b	d0, d1												; OR the pressed buttons with the last frame's pressed buttons
+		
+		move.b	d0, (a0)+											; Write the pressed bits
+		and.b	d0, d1												; AND the bits together.
+		move.b	d1, (a0)+											; Write the held bits
+		
+		addq.w	#2, a1												; Use next control port
+		dbf	d7, @readJoypads										; Loop until all joypads are read
+		
+;		move.w	#$0, $A11100										; Re-start the Z80
+		rts
+
+		
+;===================================================================================================
+; Video clrearing routines
+;===================================================================================================
+
 ClearFG:
 		move.l	#$40000003, d5
         bra.s	DoClear
@@ -271,7 +344,11 @@ DoClear:
         
 PalSys_FadeTick:
 		rts
-        
+		
+;===================================================================================================
+; Displaying routines
+;===================================================================================================
+
 DisplayHEXOnScreen:
 		lea		$C00000, a0
 		move.l	d1, 4(a0)
@@ -329,7 +406,6 @@ LoadText_Loop_NoDelay:
 		bne	LoadASCII_Print
 
 		rts
-; ---------------------------------------------------------------------------
 
 LoadASCII_Print:
 		cmp.b	#_NewLine,d2
@@ -362,8 +438,11 @@ LoadASCII_Test2:
 		cmp.b	#_NewLine,d2
 		beq		LoadASCII_Fix
 		rts
-	
 		
+;===================================================================================================
+; Data section
+;===================================================================================================
+
 MainMenu_Art:
 		incbin		"menu/art.bin"
 		even
@@ -381,7 +460,7 @@ MainMenu_FG_Map:
 		even
 		
 ASCII_MenuChoices:
-		dc.b	"  FMV to play: $", _NewLine
+		dc.b	"  FMV to play: $00", _NewLine
 		dc.b	_NewLine, _NewLine, _NewLine, _NewLine, _NewLine, _NewLine
 		dc.b	_NewLine, _NewLine, _NewLine, _NewLine, _NewLine, _NewLine
 		dc.b	_NewLine, _NewLine, _NewLine, _NewLine, _NewLine, _NewLine
@@ -392,4 +471,6 @@ ASCII_MenuChoices:
 		
 Font:	incbin	"menu/Font.bin"
 		even
+		
+;FMV_MainCode:
 		
